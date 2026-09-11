@@ -1,0 +1,10 @@
+langchain
+langchain-core
+langchain-classic
+langchain-ollama
+pydantic
+python-dotenv
+gradio
+pandas
+matplotlib
+tiktoken
