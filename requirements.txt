@@ -8,3 +8,4 @@ gradio
 pandas
 matplotlib
 tiktoken
+transformers

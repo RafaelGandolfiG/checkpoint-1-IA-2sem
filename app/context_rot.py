@@ -1,6 +1,7 @@
 # app/context_rot.py
 
 import os
+import re
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,13 +10,22 @@ import tiktoken
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from app.chain import llm
 from app.prompts import SYSTEM_PROMPT_GAMES, CONTEXT_ROT_PROMPT_GAMES
 
 # ============================================================
-# QUANTIDADES DE TURNOS UTILIZADAS NO EXPERIMENTO
+# CONFIGURAÇÕES
 # ============================================================
 
-TURNOS_TESTE = [0, 20, 50, 100, 150]
+PASTA_OUTPUT = "output"
+
+
+# Experimento principal exigido pelo projeto.
+TURNOS_TESTE = [0, 5, 10, 15, 20]
+
+
+# Teste adicional para observar contextos muito maiores.
+TURNOS_STRESS = [0, 20, 50, 100, 150]
 
 
 # ============================================================
@@ -23,158 +33,225 @@ TURNOS_TESTE = [0, 20, 50, 100, 150]
 # ============================================================
 
 INFORMACOES_IMPORTANTES = """
-O usuário informou:
+O nome do usuário é Rafael.
 
-- Seu nome é Rafael.
-- Sua plataforma principal é PC.
-- Seu gênero favorito é RPG.
-- Ele prefere jogos single-player.
-- Ele prefere jogos difíceis e desafiadores.
+A plataforma principal do usuário é PC.
+
+O gênero favorito do usuário é RPG.
+
+O usuário prefere jogos single-player.
+
+O usuário gosta de jogos difíceis e desafiadores.
 """
 
 
 # ============================================================
-# PERGUNTA FINAL
+# PERGUNTA DO EXPERIMENTO
 # ============================================================
 
 PERGUNTA_TESTE = """
-Com base exclusivamente no contexto fornecido, informe:
+Com base exclusivamente no contexto fornecido, responda:
 
-1. O nome do usuário.
-2. Sua plataforma principal.
-3. Seu gênero favorito.
-4. Se ele prefere single-player ou multiplayer.
-5. Que tipo de dificuldade ele prefere.
+1. Qual é o nome do usuário?
+2. Qual é a plataforma principal do usuário?
+3. Qual é o gênero favorito do usuário?
+4. O usuário prefere single-player ou multiplayer?
+5. Que tipo de dificuldade o usuário prefere?
 """
 
 
 # ============================================================
-# TÓPICOS UTILIZADOS PARA AUMENTAR O CONTEXTO
+# TÓPICOS UTILIZADOS COMO CONTEXTO IRRELEVANTE
 # ============================================================
 
 TOPICOS = [
-    "FPS",
-    "PvP",
-    "PvE",
-    "DLC",
-    "ray tracing",
-    "crossplay",
-    "matchmaking",
-    "roguelike",
-    "mundo aberto",
-    "jogos indie",
-    "speedrun",
-    "hitbox",
-    "input lag",
-    "RNG",
-    "patches",
-    "buff",
-    "nerf",
-    "quests",
-    "lore",
-    "grind",
+    (
+        "Jogos de corrida possuem diferentes estilos, "
+        "como arcade e simulação. Alguns priorizam física "
+        "realista enquanto outros focam em acessibilidade."
+    ),
+    (
+        "Jogos competitivos costumam utilizar sistemas "
+        "de ranking para organizar jogadores de acordo "
+        "com desempenho e habilidade."
+    ),
+    (
+        "Em jogos de estratégia, administração de recursos "
+        "e planejamento podem ser tão importantes quanto "
+        "a velocidade das decisões."
+    ),
+    (
+        "Jogos multiplayer podem utilizar servidores "
+        "dedicados ou sistemas peer-to-peer dependendo "
+        "da arquitetura escolhida."
+    ),
+    (
+        "Diversos jogos utilizam sistemas de progressão "
+        "para liberar habilidades, equipamentos ou novas "
+        "áreas conforme o jogador avança."
+    ),
+    (
+        "Em jogos de mundo aberto, exploração normalmente "
+        "é um elemento importante da experiência."
+    ),
+    (
+        "Jogos de terror podem utilizar iluminação, "
+        "design de som e limitação de recursos para "
+        "aumentar a tensão."
+    ),
+    (
+        "Sistemas de crafting permitem que jogadores "
+        "utilizem recursos coletados para criar novos itens."
+    ),
+    (
+        "Jogos de ação podem utilizar diferentes sistemas "
+        "de combate, incluindo ataques corpo a corpo "
+        "e ataques à distância."
+    ),
+    (
+        "Muitos jogos utilizam checkpoints para registrar "
+        "o progresso do jogador durante uma fase."
+    ),
+    (
+        "Jogos cooperativos incentivam jogadores a "
+        "trabalharem juntos para atingir objetivos."
+    ),
+    (
+        "Em jogos com árvores de habilidades, pontos "
+        "podem ser distribuídos entre diferentes atributos."
+    ),
+    (
+        "Alguns jogos utilizam geração procedural para "
+        "criar mapas, itens ou eventos de forma dinâmica."
+    ),
+    (
+        "Jogos com sistema de inventário podem limitar "
+        "a quantidade ou peso dos itens carregados."
+    ),
+    (
+        "Em jogos de plataforma, precisão dos controles "
+        "pode influenciar bastante a dificuldade."
+    ),
+    (
+        "Jogos de sobrevivência normalmente envolvem "
+        "gerenciamento de recursos e exploração."
+    ),
+    (
+        "Alguns jogos apresentam diferentes finais "
+        "dependendo das escolhas realizadas pelo jogador."
+    ),
+    (
+        "Jogos com economia interna podem utilizar moedas "
+        "virtuais para aquisição de equipamentos ou itens."
+    ),
+    (
+        "Em jogos baseados em equipes, personagens podem "
+        "possuir funções como ataque, defesa ou suporte."
+    ),
+    (
+        "Sistemas de dificuldade podem alterar atributos "
+        "dos inimigos, recursos disponíveis e outros "
+        "elementos da experiência."
+    ),
 ]
 
 
 # ============================================================
-# CRIAÇÃO DE TURNOS ADICIONAIS
+# TOKENIZADOR
+# ============================================================
+
+
+def criar_tokenizador():
+    """
+    Cria um tokenizador utilizado somente para estimar
+    a quantidade aproximada de tokens do contexto.
+
+    cl100k_base não é o tokenizador exato do gemma4:cloud.
+    A contagem é utilizada apenas como aproximação.
+    """
+
+    return tiktoken.get_encoding("cl100k_base")
+
+
+def contar_tokens(texto, tokenizador):
+    """
+    Retorna a quantidade aproximada de tokens.
+    """
+
+    tokens = tokenizador.encode(texto)
+
+    return len(tokens)
+
+
+# ============================================================
+# CRIAÇÃO DOS TURNOS
 # ============================================================
 
 
 def criar_turno(numero):
     """
-    Cria informações adicionais relacionadas ao domínio
-    de games para aumentar o tamanho e a complexidade
-    do contexto.
+    Cria um turno adicional de contexto.
+
+    Os turnos adicionam informações relacionadas a games
+    que não são necessárias para responder à pergunta final.
+
+    Algumas informações sobre outros usuários também são
+    adicionadas para tornar a recuperação mais desafiadora,
+    mas sem contradizer diretamente os dados do Rafael
+    utilizados como resposta correta.
     """
 
-    topico = TOPICOS[numero % len(TOPICOS)]
+    indice = numero % len(TOPICOS)
+
+    topico = TOPICOS[indice]
 
     turno = f"""
-Turno {numero + 1}
+Turno {numero + 1}:
 
 Usuário:
-Explique o conceito de {topico} dentro do universo dos games.
+Explique rapidamente algum conceito relacionado a games.
 
 Assistente:
-O conceito de {topico} pode aparecer em diferentes tipos
-de jogos e pode possuir características diferentes dependendo
-do gênero, plataforma e estilo de gameplay.
-
-Jogadores diferentes também podem interpretar ou utilizar
-{topico} de maneiras diferentes.
-
-Alguns jogadores preferem experiências competitivas,
-enquanto outros preferem experiências mais focadas em
-exploração ou narrativa.
-
-Também existem diferenças relacionadas às plataformas.
-Alguns jogadores utilizam computadores, enquanto outros
-preferem consoles.
-
-Dependendo do jogo, {topico} pode afetar diretamente
-a estratégia utilizada pelo jogador, a dificuldade,
-a progressão e a experiência geral durante a partida.
-
-A importância de {topico} também pode variar de acordo
-com o gênero do jogo e com os objetivos de cada jogador.
+{topico}
 """
 
     # --------------------------------------------------------
-    # INFORMAÇÕES DE OUTROS JOGADORES
+    # DISTRAÇÕES SEMÂNTICAS
     # --------------------------------------------------------
 
-    if numero % 5 == 0:
+    if numero % 7 == 2:
 
         turno += """
-Exemplo:
-
-Um jogador chamado Bruno prefere jogos FPS.
-
-Sua plataforma principal é PlayStation.
-
-Bruno prefere partidas multiplayer competitivas
-e normalmente escolhe jogos com dificuldade normal.
+Informação adicional:
+Bruno costuma jogar jogos multiplayer competitivos
+principalmente em consoles.
 """
 
-    if numero % 7 == 0:
+    if numero % 11 == 4:
 
         turno += """
-Outro exemplo:
-
-Um jogador chamado Lucas prefere Xbox.
-
-Seu gênero favorito é corrida.
-
-Ele prefere jogar multiplayer e normalmente
-escolhe dificuldades mais baixas.
+Informação adicional:
+Lucas gosta principalmente de jogos de corrida
+e costuma jogar em dispositivos móveis.
 """
 
-    if numero % 9 == 0:
+    if numero % 13 == 6:
 
         turno += """
-Outro jogador:
-
-Gabriel utiliza principalmente PlayStation.
-
-Ele prefere jogos de ação e aventura.
-
-Sua preferência é por experiências multiplayer
-e jogos com dificuldade normal.
+Informação adicional:
+Gabriel prefere jogos cooperativos e normalmente
+joga com amigos.
 """
 
-    if numero % 11 == 0:
+    if numero % 17 == 8:
 
         turno += """
-Exemplo adicional:
+Informação adicional:
+Existe outro jogador chamado Rafael que participou
+de uma partida multiplayer em um console.
 
-Um jogador chamado Rafael participou recentemente
-de uma partida PvP competitiva.
-
-Durante a partida ele utilizou um console.
-
-Essa informação descreve apenas aquela partida
-específica.
+Essa informação descreve apenas uma partida específica
+e não representa necessariamente suas preferências gerais.
 """
 
     return turno
@@ -187,46 +264,21 @@ específica.
 
 def criar_contexto(quantidade_turnos):
     """
-    Coloca as informações importantes no início
-    e adiciona progressivamente novos turnos.
+    Cria o contexto utilizado no teste.
+
+    As informações relevantes ficam no início.
+
+    Depois são adicionados turnos progressivamente,
+    aumentando o tamanho do contexto.
     """
 
     contexto = INFORMACOES_IMPORTANTES
 
-    for i in range(quantidade_turnos):
+    for numero in range(quantidade_turnos):
 
-        contexto += "\n"
-
-        contexto += criar_turno(i)
+        contexto += criar_turno(numero)
 
     return contexto
-
-
-# ============================================================
-# TOKENIZAÇÃO
-# ============================================================
-
-
-def criar_tokenizador():
-    """
-    Cria o tokenizador utilizado para estimar
-    o crescimento do contexto.
-    """
-
-    tokenizador = tiktoken.get_encoding("cl100k_base")
-
-    return tokenizador
-
-
-def contar_tokens(texto, tokenizador):
-    """
-    Conta aproximadamente a quantidade
-    de tokens presente no contexto.
-    """
-
-    tokens = tokenizador.encode(texto)
-
-    return len(tokens)
 
 
 # ============================================================
@@ -234,10 +286,9 @@ def contar_tokens(texto, tokenizador):
 # ============================================================
 
 
-def criar_chain_context_rot(llm):
+def criar_chain_context_rot():
     """
-    Cria a chain LCEL utilizada durante
-    todos os testes de Context Rot.
+    Cria a pipeline LCEL utilizada no teste.
     """
 
     prompt = ChatPromptTemplate.from_messages(
@@ -256,212 +307,219 @@ def criar_chain_context_rot(llm):
 
 def avaliar_resposta(resposta):
     """
-    Verifica quantas das cinco informações
+    Avalia automaticamente se as cinco informações
     principais foram recuperadas.
+
+    Cada informação correta vale 1 ponto.
+
+    Pontuação máxima: 5.
     """
 
     texto = resposta.lower()
 
     pontuacao = 0
 
-    # Nome
-    if "rafael" in texto:
+    # --------------------------------------------------------
+    # 1. NOME
+    # --------------------------------------------------------
+
+    if re.search(r"\brafael\b", texto):
+
         pontuacao += 1
 
-    # Plataforma
-    if "pc" in texto:
+    # --------------------------------------------------------
+    # 2. PLATAFORMA PRINCIPAL
+    # --------------------------------------------------------
+
+    # \b verifica limite da palavra.
+    #
+    # Dessa forma:
+    #
+    # PC.
+    # PC
+    # plataforma principal: PC
+    #
+    # são reconhecidos corretamente.
+    #
+    # Evita procurar apenas "pc" como substring.
+
+    if re.search(r"\bpc\b", texto):
+
         pontuacao += 1
 
-    # Gênero
-    if "rpg" in texto:
+    # --------------------------------------------------------
+    # 3. GÊNERO FAVORITO
+    # --------------------------------------------------------
+
+    if re.search(r"\brpg\b", texto):
+
         pontuacao += 1
 
-    # Preferência single-player
-    if "single-player" in texto or "single player" in texto:
+    # --------------------------------------------------------
+    # 4. SINGLE-PLAYER
+    # --------------------------------------------------------
+
+    padrao_single_player = r"\bsingle[- ]player\b"
+
+    if re.search(padrao_single_player, texto):
+
         pontuacao += 1
 
-    # Preferência de dificuldade
-    if (
+    # --------------------------------------------------------
+    # 5. DIFICULDADE
+    # --------------------------------------------------------
+
+    encontrou_dificuldade = (
         "difícil" in texto
         or "difíceis" in texto
         or "desafiador" in texto
         or "desafiadores" in texto
-    ):
+    )
+
+    if encontrou_dificuldade:
+
         pontuacao += 1
 
-    qualidade = (pontuacao / 5) * 100
-
-    return (pontuacao, qualidade)
+    return pontuacao
 
 
 # ============================================================
-# EXECUÇÃO DE UM TESTE
+# EXECUTAR UM TESTE
 # ============================================================
 
 
-def executar_teste(chain, tokenizador, quantidade_turnos):
+def executar_teste(chain, quantidade_turnos, tokenizador):
     """
-    Executa o experimento para uma determinada
+    Executa um teste específico com determinada
     quantidade de turnos.
     """
 
+    print(f"Executando teste com " f"{quantidade_turnos} turnos...")
+
+    # --------------------------------------------------------
+    # CONTEXTO
+    # --------------------------------------------------------
+
     contexto = criar_contexto(quantidade_turnos)
+
+    # --------------------------------------------------------
+    # TOKENS
+    # --------------------------------------------------------
 
     tokens = contar_tokens(contexto, tokenizador)
 
+    # --------------------------------------------------------
+    # MODELO
+    # --------------------------------------------------------
+
     resposta = chain.invoke({"contexto": contexto, "pergunta": PERGUNTA_TESTE})
 
-    pontuacao, qualidade = avaliar_resposta(resposta)
+    # --------------------------------------------------------
+    # AVALIAÇÃO
+    # --------------------------------------------------------
+
+    pontuacao = avaliar_resposta(resposta)
+
+    qualidade = (pontuacao / 5) * 100
+
+    # --------------------------------------------------------
+    # OUTPUT
+    # --------------------------------------------------------
+
+    print(f"Tokens aproximados: " f"{tokens}")
+
+    print(f"Pontuação: " f"{pontuacao}/5")
+
+    print(f"Qualidade: " f"{qualidade:.0f}%")
+
+    print("\nResposta:")
+
+    print(resposta)
+
+    print("\n------------------------------------------\n")
 
     resultado = {
-        "turnos": quantidade_turnos,
-        "tokens": tokens,
-        "pontuacao": pontuacao,
-        "qualidade": qualidade,
-        "resposta": resposta,
+        "Turnos": quantidade_turnos,
+        "Tokens": tokens,
+        "Pontuação": pontuacao,
+        "Qualidade (%)": qualidade,
+        "Resposta": resposta,
     }
 
     return resultado
 
 
 # ============================================================
-# EXECUÇÃO DE TODOS OS TESTES
+# EXECUTAR VÁRIOS TESTES
 # ============================================================
 
 
-def executar_context_rot(llm):
+def executar_testes(turnos):
     """
-    Executa o experimento com todos os tamanhos
-    de contexto definidos em TURNOS_TESTE.
+    Executa os testes para todas as quantidades
+    de contexto informadas.
     """
+
+    chain = criar_chain_context_rot()
 
     tokenizador = criar_tokenizador()
 
-    chain = criar_chain_context_rot(llm)
-
     resultados = []
 
-    print("\n==========================================")
-    print("       EXPERIMENTO DE CONTEXT ROT")
-    print("==========================================\n")
+    for quantidade in turnos:
 
-    for turnos in TURNOS_TESTE:
-
-        print(f"Executando teste com {turnos} turnos...")
-
-        resultado = executar_teste(chain, tokenizador, turnos)
+        resultado = executar_teste(chain, quantidade, tokenizador)
 
         resultados.append(resultado)
-
-        print(f"Tokens aproximados: " f"{resultado['tokens']}")
-
-        print(f"Pontuação: " f"{resultado['pontuacao']}/5")
-
-        print(f"Qualidade: " f"{resultado['qualidade']:.0f}%")
-
-        print("\nResposta:")
-
-        print(resultado["resposta"])
-
-        print("\n------------------------------------------\n")
 
     return resultados
 
 
 # ============================================================
-# DATAFRAME
+# ANALISAR DEGRADAÇÃO
 # ============================================================
 
 
-def criar_dataframe(resultados):
+def analisar_degradacao(dataframe):
     """
-    Transforma os resultados em DataFrame
-    para facilitar a comparação.
-    """
+    Analisa os resultados reais.
 
-    dados = []
-
-    for resultado in resultados:
-
-        dados.append(
-            {
-                "Turnos": resultado["turnos"],
-                "Tokens": resultado["tokens"],
-                "Pontuação": resultado["pontuacao"],
-                "Qualidade (%)": resultado["qualidade"],
-            }
-        )
-
-    df = pd.DataFrame(dados)
-
-    return df
-
-
-# ============================================================
-# EXIBIÇÃO DOS RESULTADOS
-# ============================================================
-
-
-def mostrar_resultados(df):
-    """
-    Mostra a tabela final no terminal.
+    Só considera que ocorreu degradação se a qualidade
+    diminuir conforme o contexto cresce.
     """
 
     print("\n==========================================")
-    print("       RESULTADOS DO CONTEXT ROT")
-    print("==========================================\n")
 
-    print(df.to_string(index=False))
-
-
-# ============================================================
-# ANÁLISE DA DEGRADAÇÃO
-# ============================================================
-
-
-def verificar_degradacao(df):
-    """
-    Verifica se ocorreu alguma queda de qualidade
-    durante o crescimento do contexto.
-    """
-
-    qualidade_inicial = df.iloc[0]["Qualidade (%)"]
-
-    menor_qualidade = df["Qualidade (%)"].min()
-
-    print("\n==========================================")
     print("        ANÁLISE DA DEGRADAÇÃO")
+
     print("==========================================\n")
 
-    if menor_qualidade < qualidade_inicial:
+    qualidades = dataframe["Qualidade (%)"].tolist()
 
-        queda = qualidade_inicial - menor_qualidade
+    houve_degradacao = False
 
-        linha_menor = df[df["Qualidade (%)"] == menor_qualidade].iloc[0]
+    for i in range(1, len(qualidades)):
 
-        print("Foi observada degradação de qualidade.")
+        if qualidades[i] < qualidades[i - 1]:
 
-        print(f"Qualidade inicial: " f"{qualidade_inicial:.0f}%")
+            houve_degradacao = True
 
-        print(f"Menor qualidade observada: " f"{menor_qualidade:.0f}%")
+    if houve_degradacao:
 
-        print(f"Queda observada: " f"{queda:.0f} pontos percentuais.")
+        print("Foi observada degradação de qualidade " "conforme o contexto cresceu.")
 
-        print("A menor qualidade ocorreu com " f"{int(linha_menor['Turnos'])} turnos.")
-
-        print(
-            "Quantidade aproximada de tokens nesse teste: "
-            f"{int(linha_menor['Tokens'])}."
-        )
+        print("Em pelo menos uma das janelas, " "a pontuação diminuiu.")
 
     else:
 
-        print("Não foi observada degradação de qualidade " "neste experimento.")
+        print(
+            "Não foi observada degradação de qualidade "
+            "nas condições deste experimento."
+        )
 
         print(
-            "O modelo conseguiu recuperar todas as "
-            "informações mesmo com o crescimento "
-            "do contexto."
+            "O modelo conseguiu recuperar corretamente "
+            "as cinco informações avaliadas."
         )
 
 
@@ -470,18 +528,16 @@ def verificar_degradacao(df):
 # ============================================================
 
 
-def salvar_csv(df):
+def salvar_csv(dataframe, caminho):
     """
-    Salva os resultados do experimento em CSV.
+    Salva os resultados em CSV.
     """
 
-    os.makedirs("output", exist_ok=True)
+    os.makedirs(PASTA_OUTPUT, exist_ok=True)
 
-    caminho = os.path.join("output", "context_rot_resultados.csv")
+    dataframe.to_csv(caminho, index=False, encoding="utf-8-sig")
 
-    df.to_csv(caminho, index=False, encoding="utf-8-sig")
-
-    print(f"\nCSV salvo em: {caminho}")
+    print(f"\nCSV salvo em: " f"{caminho}")
 
 
 # ============================================================
@@ -489,64 +545,179 @@ def salvar_csv(df):
 # ============================================================
 
 
-def gerar_grafico(df):
+def gerar_grafico(dataframe, caminho, titulo):
     """
-    Cria o gráfico de qualidade em relação
-    ao crescimento do contexto.
+    Gera gráfico mostrando a qualidade
+    em função do tamanho do contexto.
     """
 
-    os.makedirs("output", exist_ok=True)
+    os.makedirs(PASTA_OUTPUT, exist_ok=True)
 
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(9, 5))
 
-    plt.plot(df["Turnos"], df["Qualidade (%)"], marker="o")
+    plt.plot(dataframe["Tokens"], dataframe["Qualidade (%)"], marker="o")
 
-    plt.title("Context Rot - Qualidade por tamanho do contexto")
+    for _, linha in dataframe.iterrows():
 
-    plt.xlabel("Quantidade de turnos adicionais")
+        plt.annotate(
+            f'{int(linha["Turnos"])} turnos',
+            (linha["Tokens"], linha["Qualidade (%)"]),
+            textcoords="offset points",
+            xytext=(0, 8),
+            ha="center",
+        )
 
-    plt.ylabel("Qualidade da resposta (%)")
+    plt.title(titulo)
 
-    plt.xticks(TURNOS_TESTE)
+    plt.xlabel("Tokens aproximados do contexto")
 
-    plt.ylim(0, 105)
+    plt.ylabel("Qualidade (%)")
 
-    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 110)
+
+    plt.grid(True)
 
     plt.tight_layout()
-
-    caminho = os.path.join("output", "context_rot_grafico.png")
 
     plt.savefig(caminho)
 
     plt.close()
 
-    print(f"Gráfico salvo em: {caminho}")
+    print(f"Gráfico salvo em: " f"{caminho}")
 
 
 # ============================================================
-# FUNÇÃO PRINCIPAL DO EXPERIMENTO
+# EXPERIMENTO PRINCIPAL
 # ============================================================
 
 
-def executar_experimento_context_rot(llm):
+def executar_experimento_principal():
     """
-    Executa todo o experimento de Context Rot.
+    Executa o experimento obrigatório:
+
+    0
+    5
+    10
+    15
+    20 turnos.
     """
 
-    resultados = executar_context_rot(llm)
+    print("\n==========================================")
 
-    df = criar_dataframe(resultados)
+    print("       EXPERIMENTO PRINCIPAL")
 
-    mostrar_resultados(df)
+    print("==========================================\n")
 
-    verificar_degradacao(df)
+    resultados = executar_testes(TURNOS_TESTE)
 
-    salvar_csv(df)
+    dataframe = pd.DataFrame(resultados)
 
-    gerar_grafico(df)
+    colunas_exibicao = ["Turnos", "Tokens", "Pontuação", "Qualidade (%)"]
 
-    return df
+    print("\n==========================================")
+
+    print("       RESULTADOS PRINCIPAIS")
+
+    print("==========================================\n")
+
+    print(dataframe[colunas_exibicao].to_string(index=False))
+
+    analisar_degradacao(dataframe)
+
+    caminho_csv = os.path.join(PASTA_OUTPUT, "context_rot_resultados.csv")
+
+    caminho_grafico = os.path.join(PASTA_OUTPUT, "context_rot_grafico.png")
+
+    salvar_csv(dataframe, caminho_csv)
+
+    gerar_grafico(
+        dataframe, caminho_grafico, ("Context Rot - " "Experimento Principal")
+    )
+
+    return dataframe
+
+
+# ============================================================
+# STRESS TEST
+# ============================================================
+
+
+def executar_stress_test():
+    """
+    Executa um teste adicional utilizando
+    contextos significativamente maiores.
+
+    Esse teste não substitui o experimento
+    principal de 0/5/10/15/20.
+    """
+
+    print("\n==========================================")
+
+    print("       STRESS TEST DE CONTEXTO")
+
+    print("==========================================\n")
+
+    resultados = executar_testes(TURNOS_STRESS)
+
+    dataframe = pd.DataFrame(resultados)
+
+    colunas_exibicao = ["Turnos", "Tokens", "Pontuação", "Qualidade (%)"]
+
+    print("\n==========================================")
+
+    print("       RESULTADOS DO STRESS TEST")
+
+    print("==========================================\n")
+
+    print(dataframe[colunas_exibicao].to_string(index=False))
+
+    analisar_degradacao(dataframe)
+
+    caminho_csv = os.path.join(PASTA_OUTPUT, "context_rot_stress.csv")
+
+    caminho_grafico = os.path.join(PASTA_OUTPUT, "context_rot_stress.png")
+
+    salvar_csv(dataframe, caminho_csv)
+
+    gerar_grafico(dataframe, caminho_grafico, ("Context Rot - " "Stress Test"))
+
+    return dataframe
+
+
+# ============================================================
+# EXECUÇÃO COMPLETA
+# ============================================================
+
+
+def executar_experimento_context_rot():
+    """
+    Executa o experimento principal e o
+    stress test adicional.
+    """
+
+    print("\nGAMEGUIDE - CONTEXT ROT")
+
+    print("Mesmo prompt com contextos crescentes.")
+
+    print(
+        "A qualidade somente será considerada "
+        "degradada caso os resultados reais "
+        "apresentem queda."
+    )
+
+    # --------------------------------------------------------
+    # EXPERIMENTO PRINCIPAL
+    # --------------------------------------------------------
+
+    dataframe_principal = executar_experimento_principal()
+
+    # --------------------------------------------------------
+    # STRESS TEST
+    # --------------------------------------------------------
+
+    dataframe_stress = executar_stress_test()
+
+    return (dataframe_principal, dataframe_stress)
 
 
 # ============================================================
@@ -555,6 +726,4 @@ def executar_experimento_context_rot(llm):
 
 if __name__ == "__main__":
 
-    from app.chain import llm
-
-    executar_experimento_context_rot(llm)
+    executar_experimento_context_rot()

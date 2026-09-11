@@ -1,11 +1,10 @@
 # app/main.py
 
+import traceback
 import gradio as gr
 
 from app.chain import llm_chat, analisar_consulta
-
 from app.memory_manager import criar_chat_com_memoria, enviar_mensagem, limpar_memoria
-
 from app.prompts import SYSTEM_PROMPT_GAMES
 
 # ============================================================
@@ -28,135 +27,195 @@ MENSAGEM_FORA_DOMINIO = (
 
 
 # ============================================================
+# VERIFICAR CONTEXTO PESSOAL PERMITIDO
+# ============================================================
+
+
+def eh_contexto_pessoal(mensagem):
+    """
+    Identifica mensagens pessoais simples que podem ser
+    úteis para personalizar futuras conversas sobre games.
+
+    Exemplo:
+    "Meu nome é Rafael."
+
+    Essas mensagens podem ser armazenadas na memória,
+    mesmo não sendo diretamente uma pergunta sobre games.
+    """
+
+    texto = mensagem.lower().strip()
+
+    prefixos_permitidos = [
+        "meu nome é ",
+        "meu nome e ",
+        "me chamo ",
+        "pode me chamar de ",
+    ]
+
+    for prefixo in prefixos_permitidos:
+
+        if texto.startswith(prefixo):
+            return True
+
+    return False
+
+
+# ============================================================
 # FUNÇÃO PRINCIPAL DO CHATBOT
 # ============================================================
 
 
-def responder(mensagem, historico):
-    """
-    Recebe a mensagem do usuário, analisa a consulta
-    e gera a resposta do GameGuide.
-    """
-
-    # Verifica se a mensagem está vazia
-    if not mensagem:
-        return "Digite uma mensagem para conversar " "com o GameGuide."
-
-    mensagem = mensagem.strip()
-
-    # Verifica novamente depois de remover espaços
-    if not mensagem:
-        return "Digite uma mensagem para conversar " "com o GameGuide."
-
-    # ========================================================
-    # ANÁLISE ESTRUTURADA
-    # ========================================================
+def responder(mensagem, _historico):
 
     try:
+
+        # ----------------------------------------------------
+        # VALIDAR MENSAGEM
+        # ----------------------------------------------------
+
+        if not mensagem:
+
+            return "Digite uma mensagem para conversar " "com o GameGuide."
+
+        mensagem = mensagem.strip()
+
+        if not mensagem:
+
+            return "Digite uma mensagem para conversar " "com o GameGuide."
+
+        # ----------------------------------------------------
+        # ANÁLISE ESTRUTURADA
+        # ----------------------------------------------------
 
         analise = analisar_consulta(mensagem)
 
-    except Exception as erro:
+        print("\n==========================================")
 
-        print("\nErro durante a análise estruturada:")
+        print("       ANÁLISE DA CONSULTA")
 
-        print(erro)
+        print("==========================================")
 
-        return (
-            "Não consegui analisar sua mensagem corretamente. "
-            "Tente reformular a pergunta."
+        print(f"Dentro do domínio: " f"{analise.dentro_dominio}")
+
+        print(f"Assunto: " f"{analise.assunto}")
+
+        print(f"Tipo: " f"{analise.tipo_consulta}")
+
+        print(f"Jogo mencionado: " f"{analise.jogo_mencionado}")
+
+        print(
+            f"Precisa de contexto adicional: " f"{analise.precisa_contexto_adicional}"
         )
 
-    # ========================================================
-    # VERIFICAÇÃO DO DOMÍNIO
-    # ========================================================
+        print(f"Resumo: " f"{analise.resumo}")
 
-    if not analise.dentro_dominio:
+        print("==========================================\n")
 
-        return MENSAGEM_FORA_DOMINIO
+        # ----------------------------------------------------
+        # CONTEXTO PESSOAL
+        # ----------------------------------------------------
 
-    # ========================================================
-    # RESPOSTA COM MEMÓRIA
-    # ========================================================
+        contexto_pessoal = eh_contexto_pessoal(mensagem)
 
-    try:
+        # ----------------------------------------------------
+        # FORA DO DOMÍNIO
+        # ----------------------------------------------------
+
+        if not analise.dentro_dominio and not contexto_pessoal:
+
+            return MENSAGEM_FORA_DOMINIO
+
+        # ----------------------------------------------------
+        # CHAT COM MEMÓRIA
+        # ----------------------------------------------------
 
         resposta = enviar_mensagem(chat, mensagem)
 
+        return resposta
+
+    # ========================================================
+    # TRATAMENTO DE ERROS
+    # ========================================================
+
     except Exception as erro:
 
-        print("\nErro durante a geração da resposta:")
+        print("\n==========================================")
 
-        print(erro)
+        print("            ERRO NO CHAT")
+
+        print("==========================================\n")
+
+        print(f"Tipo do erro: " f"{type(erro).__name__}")
+
+        print(f"Mensagem: " f"{erro}")
+
+        print("\nTraceback completo:\n")
+
+        traceback.print_exc()
+
+        print("\n==========================================\n")
 
         return "Ocorreu um problema ao gerar a resposta. " "Tente novamente."
 
-    return resposta
-
 
 # ============================================================
-# FUNÇÃO PARA LIMPAR A MEMÓRIA
+# LIMPAR CONVERSA
 # ============================================================
 
 
 def limpar_conversa():
-    """
-    Limpa o histórico armazenado pela memória
-    do chatbot.
-    """
 
-    limpar_memoria(memoria)
+    try:
 
-    return "Memória da conversa limpa."
+        limpar_memoria(memoria)
+
+        print("\nMemória do GameGuide limpa.")
+
+    except Exception:
+
+        print("\nErro ao limpar a memória.")
+
+        traceback.print_exc()
 
 
 # ============================================================
 # INTERFACE GRADIO
 # ============================================================
 
-demo = gr.ChatInterface(
+interface = gr.ChatInterface(
     fn=responder,
     title="GameGuide",
     description=(
-        "Chatbot profissional especializado no universo de games. "
-        "Pergunte sobre jogos, consoles, plataformas, mecânicas, "
-        "estratégias, recomendações e comparações."
+        "Assistente virtual profissional " "especializado no universo de games."
     ),
+    examples=[
+        "O que é um RPG?",
+        "Me recomende um RPG difícil para PC.",
+        ("Elden Ring ou Dark Souls 3, " "qual é mais difícil?"),
+        (
+            "Quais são as principais diferenças "
+            "entre jogos single-player e multiplayer?"
+        ),
+    ],
 )
 
 
 # ============================================================
-# FUNÇÃO PRINCIPAL
-# ============================================================
-
-
-def main():
-    """
-    Inicia a interface Gradio do GameGuide.
-    """
-
-    print("\n==========================================")
-
-    print("             GAMEGUIDE")
-
-    print("==========================================")
-
-    print("\nChatbot iniciado com sucesso.")
-
-    print("Modelo: gemma4:cloud")
-
-    print("Memória: ConversationTokenBufferMemory")
-
-    print("Pipeline estruturada: LCEL + Pydantic")
-
-    print("\nAbrindo interface Gradio...\n")
-
-    demo.launch()
-
-
-# ============================================================
-# ENTRY POINT
+# EXECUÇÃO
 # ============================================================
 
 if __name__ == "__main__":
-    main()
+
+    print("\n==========================================")
+
+    print("            GAMEGUIDE")
+
+    print("==========================================")
+
+    print("Iniciando interface...")
+
+    print("Pressione CTRL + C para encerrar.")
+
+    print("==========================================\n")
+
+    interface.launch()

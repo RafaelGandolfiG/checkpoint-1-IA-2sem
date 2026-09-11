@@ -8,7 +8,10 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 
-from app.prompts import SYSTEM_PROMPT_GAMES, ANALISE_PROMPT_GAMES
+from app.prompts import (
+    SYSTEM_PROMPT_GAMES,
+    ANALISE_PROMPT_GAMES,
+)
 
 from app.schemas import AnaliseConsulta
 
@@ -26,8 +29,12 @@ OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:cloud")
 
 
-# Verifica se a chave foi configurada no .env
+# ============================================================
+# VERIFICAÇÃO DA API KEY
+# ============================================================
+
 if not OLLAMA_API_KEY:
+
     raise RuntimeError(
         "OLLAMA_API_KEY não encontrada. "
         "Crie um arquivo .env baseado no .env.example "
@@ -35,44 +42,53 @@ if not OLLAMA_API_KEY:
     )
 
 
-# Disponibiliza as configurações para o ChatOllama
+# Disponibiliza as configurações para a biblioteca Ollama.
 os.environ["OLLAMA_HOST"] = OLLAMA_HOST
 os.environ["OLLAMA_API_KEY"] = OLLAMA_API_KEY
 
 
 # ============================================================
-# FUNÇÃO PARA CRIAR O MODELO
+# CRIAÇÃO DO MODELO
 # ============================================================
 
 
-def criar_llm(temperatura=0.7):
+def criar_llm(temperatura=0.7, num_predict=512):
     """
-    Cria uma instância do ChatOllama utilizando
-    o modelo definido no arquivo .env.
+    Cria uma instância do modelo utilizado pelo projeto.
+
+    temperatura:
+        controla a criatividade da resposta.
+
+    num_predict:
+        define aproximadamente o limite máximo
+        de tokens que o modelo pode gerar.
     """
 
     llm = ChatOllama(
         model=OLLAMA_MODEL,
         base_url=OLLAMA_HOST,
         temperature=temperatura,
-        num_predict=512,
+        num_predict=num_predict,
     )
 
     return llm
 
 
 # ============================================================
-# MODELO UTILIZADO PARA O CHAT
+# MODELOS UTILIZADOS PELO CHATBOT
 # ============================================================
 
-llm_chat = criar_llm(temperatura=0.7)
+# Modelo utilizado nas respostas conversacionais.
+llm_chat = criar_llm(temperatura=0.7, num_predict=512)
 
 
-# ============================================================
-# MODELO UTILIZADO PARA A ANÁLISE ESTRUTURADA
-# ============================================================
+# Modelo com temperatura menor para a análise estruturada.
+llm_analise = criar_llm(temperatura=0.2, num_predict=512)
 
-llm_analise = criar_llm(temperatura=0.2)
+
+# Mantido para compatibilidade com outros módulos,
+# como context_rot.py.
+llm = llm_chat
 
 
 # ============================================================
@@ -83,7 +99,7 @@ parser_analise = PydanticOutputParser(pydantic_object=AnaliseConsulta)
 
 
 # ============================================================
-# CHAT PROMPT TEMPLATE
+# PROMPT DA ANÁLISE
 # ============================================================
 
 prompt_analise = ChatPromptTemplate.from_messages(
@@ -92,40 +108,33 @@ prompt_analise = ChatPromptTemplate.from_messages(
 
 
 # Adiciona automaticamente ao prompt as instruções
-# de formatação geradas pelo PydanticOutputParser
+# de formato geradas pelo PydanticOutputParser.
 prompt_analise = prompt_analise.partial(
     instrucoes_formato=(parser_analise.get_format_instructions())
 )
 
 
 # ============================================================
-# CHAIN LCEL
+# PIPELINE LCEL
 # ============================================================
 
 chain_analise = prompt_analise | llm_analise | parser_analise
 
 
 # ============================================================
-# FUNÇÃO PARA ANALISAR A CONSULTA
+# FUNÇÃO DE ANÁLISE
 # ============================================================
 
 
 def analisar_consulta(pergunta):
     """
-    Analisa a mensagem do usuário utilizando
-    a chain LCEL e retorna um objeto AnaliseConsulta.
+    Analisa a mensagem do usuário e retorna
+    um objeto AnaliseConsulta validado pelo Pydantic.
     """
 
     resultado = chain_analise.invoke({"pergunta": pergunta})
 
     return resultado
-
-
-# ============================================================
-# ALIAS UTILIZADO PELO CONTEXT_ROT.PY
-# ============================================================
-
-llm = llm_chat
 
 
 # ============================================================
@@ -135,7 +144,7 @@ llm = llm_chat
 
 def testar_chain():
     """
-    Executa um teste simples da análise estruturada.
+    Executa um teste simples da pipeline estruturada.
     """
 
     pergunta = (
@@ -165,8 +174,9 @@ def testar_chain():
 
 
 # ============================================================
-# EXECUÇÃO DIRETA PARA TESTE
+# EXECUÇÃO DIRETA
 # ============================================================
 
 if __name__ == "__main__":
+
     testar_chain()
