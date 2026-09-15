@@ -282,15 +282,15 @@ Consulta pertence ao domínio?
    │
    └── SIM
         ↓
-   ConversationChain
+    ConversationChain
         +
-   ConversationTokenBufferMemory
+    ConversationTokenBufferMemory
         +
-   MEMORY_PROMPT_GAMES
+    MEMORY_PROMPT_GAMES
         ↓
-      GameGuide
+       GameGuide
         ↓
-      Resposta
+       Resposta
 ```
 
 Dessa forma, a aplicação utiliza duas partes principais: uma chain estruturada para analisar a mensagem e uma `ConversationChain` responsável pela conversa com memória.
@@ -432,21 +432,27 @@ Exemplo:
 
 ```text
 Turno 1
+
 Usuário: Meu nome é Rafael.
 
 Turno 2
+
 Usuário: Eu jogo principalmente no PC.
 
 Turno 3
+
 Usuário: Meu gênero favorito é RPG.
 
 Turno 4
+
 Usuário: Eu prefiro jogos single-player.
 
 Turno 5
+
 Usuário: Eu gosto de jogos difíceis.
 
 Turno 6
+
 Usuário:
 Com base no que eu falei anteriormente,
 qual é meu nome, minha plataforma principal,
@@ -1025,6 +1031,72 @@ A chave real deve ser obtida na conta utilizada para acessar a Ollama Cloud.
 **Nunca coloque a chave real no `.env.example`.**
 
 **Nunca envie o `.env` para o GitHub ou na entrega.**
+
+## 25.1 Criando o arquivo `.env`
+
+Antes de executar o projeto, é necessário criar manualmente um arquivo chamado:
+
+```text
+.env
+```
+
+na raiz do projeto, no mesmo local onde estão o `README.md`, o `requirements.txt` e o `.env.example`.
+
+A estrutura ficará semelhante a:
+
+```text
+checkpoint-1-IA-2sem/
+├── app/
+├── output/
+├── .env
+├── .env.example
+├── .gitignore
+├── requirements.txt
+└── README.md
+```
+
+O arquivo `.env.example` deve ser utilizado como modelo para criar o `.env`.
+
+O `.env.example` contém:
+
+```env
+OLLAMA_HOST=https://ollama.com
+OLLAMA_API_KEY=SUA_CHAVE_REAL_AQUI
+OLLAMA_MODEL=gemma4:cloud
+```
+
+Copie essas variáveis para o arquivo `.env`.
+
+Depois, obtenha uma **API Key válida da Ollama** e substitua:
+
+```text
+SUA_CHAVE_REAL_AQUI
+```
+
+pela sua chave.
+
+O arquivo `.env` ficará no seguinte formato:
+
+```env
+OLLAMA_HOST=https://ollama.com
+OLLAMA_API_KEY=SUA_API_KEY_DA_OLLAMA
+OLLAMA_MODEL=gemma4:cloud
+```
+
+A API Key real deve existir **somente no arquivo `.env`**.
+
+Não coloque a chave real no `.env.example`, no código Python ou no GitHub.
+
+A diferença entre os dois arquivos é:
+
+```text
+.env.example → modelo que mostra quais variáveis devem ser configuradas
+.env         → arquivo local que contém a API Key real
+```
+
+O `.env.example` deve acompanhar o projeto para que outra pessoa saiba quais variáveis precisa configurar.
+
+O `.env` não deve ser enviado para o GitHub nem incluído na entrega, pois contém a credencial de acesso à Ollama Cloud.
 
 ---
 
